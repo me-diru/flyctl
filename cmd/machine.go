@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -13,10 +12,8 @@ import (
 	surveyterminal "github.com/AlecAivazis/survey/v2/terminal"
 	"github.com/dustin/go-humanize"
 	"github.com/google/shlex"
-	"github.com/logrusorgru/aurora"
 	"github.com/olekukonko/tablewriter"
 	"github.com/pkg/errors"
-	"github.com/segmentio/textio"
 	"github.com/spf13/cobra"
 	"github.com/superfly/flyctl/api"
 	"github.com/superfly/flyctl/cmd/presenters"
@@ -496,62 +493,57 @@ func newMachineRunCommand(parent *Command, client *client.Client) {
 }
 
 func newMachineStatusCommand(parent *Command, client *client.Client) {
-	cmd := BuildCommandKS(parent, getMachineStatus, docstrings.Get("machine.status"), client, requireSession, optionalAppName)
+	cmd := BuildCommandKS(parent, runMachineStatus, docstrings.Get("machine.status"), client, requireSession, optionalAppName)
+
 	cmd.Args = cobra.ExactArgs(1)
 }
 
-func getMachineStatus(cmdCtx *cmdctx.CmdContext) error {
+func runMachineStatus(cmdCtx *cmdctx.CmdContext) error {
 	ctx := cmdCtx.Command.Context()
 
-	alloc, err := cmdCtx.Client.API().GetAllocationStatus(ctx, cmdCtx.AppName, cmdCtx.Args[0], 25)
+	if cmdCtx.AppName == "" {
+		return errors.New("no app name specified")
+	}
+
+	if cmdCtx.Args[0] == "" {
+		return errors.New("no machine id specified")
+	}
+
+	machine, err := cmdCtx.Client.API().GetMachine(ctx, cmdCtx.AppName, cmdCtx.Args[0])
 	if err != nil {
 		return err
 	}
-	if alloc == nil {
+	if machine == nil {
 		return api.ErrNotFound
+	}
+
+	if cmdCtx.OutputJSON() {
+		cmdCtx.WriteJSON(machine)
+		return nil
 	}
 
 	err = cmdCtx.Frender(
 		cmdctx.PresenterOption{
-			Title: "Instance",
-			Presentable: &presenters.Allocations{
-				Allocations: []*api.AllocationStatus{alloc},
+			Title: "Machine",
+			Presentable: &presenters.Machines{
+				Machines: []api.Machine{*machine},
 			},
 			Vertical: true,
 		},
 		cmdctx.PresenterOption{
-			Title: "Recent Events",
-			Presentable: &presenters.AllocationEvents{
-				Events: alloc.Events,
+			Presentable: &presenters.MachineIPs{
+				IPAddresses: machine.IPs.Nodes,
 			},
 		},
 		cmdctx.PresenterOption{
-			Title: "Checks",
-			Presentable: &presenters.AllocationChecks{
-				Checks: alloc.Checks,
+			Title: "Recent Events",
+			Presentable: &presenters.MachineEvents{
+				Events: machine.Events.Nodes,
 			},
 		},
 	)
 	if err != nil {
 		return err
-	}
-
-	var p io.Writer
-	var pw *textio.PrefixWriter
-
-	if !cmdCtx.OutputJSON() {
-		fmt.Println(aurora.Bold("Recent Logs"))
-		pw = textio.NewPrefixWriter(cmdCtx.Out, "  ")
-		p = pw
-	} else {
-		p = cmdCtx.Out
-	}
-
-	// logPresenter := presenters.LogPresenter{HideAllocID: true, HideRegion: true, RemoveNewlines: true}
-	// logPresenter.FPrint(p, ctx.OutputJSON(), alloc.RecentLogs)
-
-	if p != cmdCtx.Out {
-		_ = pw.Flush()
 	}
 
 	return nil
